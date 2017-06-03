@@ -1,5 +1,6 @@
+source("/drives/slave/TBU/LINCS_RawData/Functions_l1ktools.R")
 
-# GETquery.api (v.1.0) ::: QUERY to the https://api.clue.io/ via RESTful service.
+# GETquery.api.CLUE (v.1.0) ::: QUERY to the https://api.clue.io/ via RESTful service.
 ## Description
 ###   By default, it will try to perform the query and retrieve if there 
 ###     was ANY response from the RESTful service. (status of the query).
@@ -18,7 +19,7 @@
 ## Dependencies:
 ###   library(rjson) # Read json into a list in R
 ###   require(RCurl) # To get text from URL as json object
-GETquery.api <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,tryAgainAfter_Xmins=20) {
+GETquery.api.CLUE <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,tryAgainAfter_Xmins=20) {
   require(rjson)
   require(RCurl)
   # Parameters sanity check:
@@ -44,7 +45,7 @@ GETquery.api <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,tryAg
         error = function(e) e
       )
       if(inherits(status,  "error")) {
-        warning("LINCS API did NOT response");
+        warning("api.clue.io's API did NOT response");
         if(tryNtimesIfFailed!=0) {
           tryNtimesIfFailed <- tryNtimesIfFailed-1;
           print(paste0("Go to sleep and try Again after ",tryAgainAfter_Xmins,"minutes"));
@@ -62,4 +63,77 @@ GETquery.api <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,tryAg
   
   # it returns a list, empty if the query fails or got 0 results, or with something
   return(info.got); 
+}
+
+BUILDquery.filter <- function(service="profiles",
+                              where=c("pert_type"="trt_sh"),
+                              fields=NULL,
+                              features=c("limit"=1000,"skip"=0),
+                              user_key="9332b818ed68dd90d5915a83d5cf753a") {
+  # Internal variables
+  web.url <- "https://api.clue.io/api/";
+  
+  # Process params
+  if(is.vector(where)) {
+    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
+  } else if (is.list(where)) {
+    where.url_items <- sapply(1:length(where), function(z) {
+      if(length(where[[z]])==1) {
+        paste0("%22",names(where)[z],"%22:",where[[z]])    
+      } else if (length(where[[z]])>1) {
+        paste0("%22",names(where)[z],"%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]")
+      }
+    })
+  }
+  where.url <- paste(where.url_items,collapse=",")
+  
+  # Process fields
+  if(!is.null(fields)) {
+    fields.url_items <- sapply(1:length(fields),function(z) paste0("%22",names(fields)[z],"%22:",fields[z]))
+    fields.url <- paste(fields.url_items,collapse=",")
+  }
+  
+  # Process features
+  features.url_items <- sapply(1:length(features),function(z) paste0("%22",names(features)[z],"%22:",features[z]))
+  features.url <- paste(features.url_items,collapse=",")
+  
+  # Build the query
+  query.url <- paste0(web.url,service,"?filter={%22where%22:","{",where.url,"}")
+  if(!is.null(fields)) query.url <- paste0(query.url,",%22fields%22:{",fields.url,"}");
+  query.url <- paste0(query.url,",",features.url)
+  query.url <- paste0(query.url,"}&user_key=",user_key)
+  
+  
+  # Return the URL for the query
+  return(query.url)
+}
+
+
+BUILDquery.count <- function(service="profiles",
+                              where=c("pert_type"="trt_sh"),
+                              user_key="9332b818ed68dd90d5915a83d5cf753a") {
+  # Internal variables
+  web.url <- "https://api.clue.io/api/";
+  
+  # Process params
+  if(is.vector(where)) {
+    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
+  } else if (is.list(where)) {
+    where.url_items <- sapply(1:length(where), function(z) {
+      if(length(where[[z]])==1) {
+        paste0("%22",names(where)[z],"%22:",where[[z]])    
+      } else if (length(where[[z]])>1) {
+        paste0("%22",names(where)[z],"%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]")
+      }
+    })
+  }
+  where.url <- paste(where.url_items,collapse=",")
+
+  # Build the query
+  query.url <- paste0(web.url,service,"/count?={%22where%22","=",where.url,"}")
+  query.url <- paste0(query.url,"&user_key=",user_key)
+  
+  
+  # Return the URL for the query
+  return(query.url)
 }
