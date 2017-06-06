@@ -1,7 +1,7 @@
 source("/drives/slave/TBU/LINCS_RawData/Functions_l1ktools.R")
 
-# GETquery.api.CLUE (v.1.0) ::: QUERY to the https://api.clue.io/ via RESTful service.
-## Description
+# GETquery.api.CLUE (v.1.0) ################
+## Description ::: QUERY to the https://api.clue.io/ via RESTful service.
 ###   By default, it will try to perform the query and retrieve if there 
 ###     was ANY response from the RESTful service. (status of the query).
 ###     If there was no response, it could be any of the following situations:
@@ -65,8 +65,13 @@ GETquery.api.CLUE <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,
   return(info.got); 
 }
 
+
+# BUILDquery.filter ############# 
+## Description: Build a Query for GETquery.api.CLUE
+###   Generate a URL to be used by GETquery.api.CLUE (i.e. query.url) using
+###   the normal feature (w/ or wo/ filtering). It is useful for listing documents.
 BUILDquery.filter <- function(service="profiles",
-                              where=c("pert_type"="trt_sh"),
+                              where=c("pert_type"="trt_cp"),
                               fields=NULL,
                               features=c("limit"=1000,"skip"=0),
                               user_key="9332b818ed68dd90d5915a83d5cf753a") {
@@ -74,22 +79,26 @@ BUILDquery.filter <- function(service="profiles",
   web.url <- "https://api.clue.io/api/";
   
   # Process params
-  if(is.vector(where)) {
-    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
-  } else if (is.list(where)) {
+  
+  if (is.list(where)) {
+    # Remove NULL items
+    where <- where[!unlist(lapply(where,is.null))]
+    
     where.url_items <- sapply(1:length(where), function(z) {
       if(length(where[[z]])==1) {
-        paste0("%22",names(where)[z],"%22:",where[[z]])    
+        paste0("%22",names(where)[z],"%22:%22",where[[z]],"%22")    
       } else if (length(where[[z]])>1) {
-        paste0("%22",names(where)[z],"%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]")
+        paste0("%22",names(where)[z],"%22:{%22inq%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]}")
       }
     })
+  } else if(is.vector(where)) {
+    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
   }
   where.url <- paste(where.url_items,collapse=",")
   
   # Process fields
   if(!is.null(fields)) {
-    fields.url_items <- sapply(1:length(fields),function(z) paste0("%22",names(fields)[z],"%22:",fields[z]))
+    fields.url_items <- sapply(1:length(fields),function(z) paste0("%22",fields[z],"%22:",1))
     fields.url <- paste(fields.url_items,collapse=",")
   }
   
@@ -108,32 +117,684 @@ BUILDquery.filter <- function(service="profiles",
   return(query.url)
 }
 
-
+# BUILDquery.count ############
+## Description: Build a Query for GETquery.api.CLUE
+###   Generate a URL to be used by GETquery.api.CLUE (i.e. query.url) using
+###   the normal feature (w/ or wo/ filtering). It is useful for counting documents.
 BUILDquery.count <- function(service="profiles",
-                              where=c("pert_type"="trt_sh"),
+                              where=c("pert_type"="trt_cp"),
                               user_key="9332b818ed68dd90d5915a83d5cf753a") {
   # Internal variables
   web.url <- "https://api.clue.io/api/";
   
   # Process params
-  if(is.vector(where)) {
-    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
-  } else if (is.list(where)) {
+  if (is.list(where)) {
+    # Remove NULL items
+    where <- where[!unlist(lapply(where,is.null))]
+    
     where.url_items <- sapply(1:length(where), function(z) {
       if(length(where[[z]])==1) {
-        paste0("%22",names(where)[z],"%22:",where[[z]])    
+        paste0("%22",names(where)[z],"%22:%22",where[[z]],"%22")    
       } else if (length(where[[z]])>1) {
-        paste0("%22",names(where)[z],"%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]")
+        paste0("%22",names(where)[z],"%22:{%22inq%22:[",paste0("%22",where[[z]],"%22",collapse=","),"]}")
       }
     })
+  } else if(is.vector(where)) {
+    where.url_items <- sapply(1:length(where),function(z) paste0("%22",names(where)[z],"%22:%22",where[z],"%22"))
   }
   where.url <- paste(where.url_items,collapse=",")
 
-  # Build the query
-  query.url <- paste0(web.url,service,"/count?={%22where%22","=",where.url,"}")
+  # Build the query :
+  query.url <- paste0(web.url,service,"/count?where","={",where.url,"}")
   query.url <- paste0(query.url,"&user_key=",user_key)
   
   
   # Return the URL for the query
   return(query.url)
+}
+
+# GETpert_info #############
+## Description :: Get metadata from all entries for a given pert_iname/pert_type
+### This function get all metadata available for a given drug. For instance, all distil_ids for DMSO.
+GETpert_info <- function(pert_iname=NULL,pert_ids=NULL,where=list("pert_type"="trt_cp"),
+                         fields=NULL,metadata=NULL,
+                         user_key="lincsdemo",waitXsecs=0) {
+  
+  # Internal variables
+  service <- "profiles"
+  
+  if(!is.null(pert_iname) & !is.null(pert_ids)) {
+    stop("Conflict of input parameters")
+  }
+  
+  if(!is.null(pert_iname)) {
+    q1 <- BUILDquery.filter(service = "perts",
+                            where = c("pert_iname"=pert_iname),
+                            fields = c("pert_id"),
+                            features = c("limit"=1000,"skip"=0),
+                            user_key=user_key)
+    g1 <- GETquery.api.CLUE(q1)
+    pert_ids <- unlist(lapply(g1,function(z) z$pert_id))
+    pert_iname <- NULL
+  }
+  
+  # The CLUE api does not include pert_iname in the service profiles, so we need to get it from the other
+  # service called perts
+  
+  
+  # From old LINCScloud documentation
+  block_size <- 1000;
+  pert_type.opt <- data.frame(Class=c("Treatment","Treatment","Treatment","Treatment","Treatment","Treatment",
+                                      "Control","Control","Control","Control","Control","Control","Control"),
+                              Perturbation=c("Chemical compound","Gene knockdown","Consensus gene knockdown","Gene over expression",
+                                             "Mutant gene over expression","Ligand treatment","Untreated","Consensus untreated",
+                                             "Control vector","Consensus control vector","Consensus seed signature","Vehicle control",
+                                             "Consensus vehicle control"),
+                              pert_type=c("trt_cp","trt_sh","trt_sh.cgs","trt_oe","trt_oe.mut","trt_lig","ctl_untrt","ctl_untrt.cns",
+                                          "ctl_vector","ctl_vector.cns","trt_sh.css","ctl_vehicle","ctl_vehicle.cns"))
+  
+  
+  
+  q0 <- BUILDquery.count(service = service,where = c(where,list("pert_id"=pert_ids)),user_key = user_key)
+  # cat(paste0("#QUERY counts:",q0,"\n"))
+  g0 <- GETquery.api.CLUE(q0)
+  NumDocs <- g0$count
+  
+  if(NumDocs==0) stop("ERROR #1 : It seems that the perturbation does not exist.\n")
+  
+  cat(paste0("#","pert_id(s):",paste(pert_ids,collapse = ";")," (Count=",NumDocs,")\n"),file=stdout())
+
+    num_blocks <- ceiling(NumDocs/block_size)
+    info.got <- vector()
+    if(num_blocks==1) {
+      q1 <- BUILDquery.filter(service = service,
+                              where = c(where,list("pert_id"=pert_ids)),
+                              fields = c(fields,metadata),
+                              features = c("limit"=1000,"skip"=0),
+                              user_key=user_key)
+      g1 <- GETquery.api.CLUE(q1)
+      
+      info.got <- g1
+    } else {
+      for(i in 1:num_blocks) {
+        qi <- BUILDquery.filter(service = service,
+                                where = c(where,list("pert_id"=pert_ids)),
+                                fields = c(fields,metadata),
+                                features = c("limit"=block_size,"skip"=(i-1)*block_size),
+                                user_key=user_key)
+        cat(paste0("   #",i,"/",num_blocks,"::QUERY::",qi,"\n"),file=stdout())
+        gi <- GETquery.api.CLUE(qi)
+
+        # Store the output
+        info.got <- c(info.got,gi)
+        
+        
+          # Avoid BAN before getting blocked
+        if(waitXsecs!=0)
+          Sys.sleep(waitXsecs) # Go to sleep some seconds
+      } 
+    }
+  
+    # If only is one metadata of interest
+    if(!is.null(metadata)) info.got <- unlist(lapply(info.got,function(z) z[[metadata]]))
+    
+    
+    return(info.got)
+}
+
+# checkIFperturbationEXISTS()
+# Description
+#   It will check if a pert_iname exists or not.
+###   pert_iname : he pert_iname for the drug/gene symbol of interest or NULL for control experiments
+###   user_key : your user key
+checkIFperturbationEXISTS <- function(pert_iname=NULL,pert_ids=NULL,pert_type=NULL,cell_id=NULL,user_key) {
+  # Sanity Check
+  if(any(length(pert_iname)>1) )
+    stop("ERROR #1 : just 1 argument for parameter")
+  if(is.null(pert_iname) & is.null(pert_ids)) {
+    if(!(pert_type%in%c("ctl_vehicle","ctl_vector","ctl_untrt")))
+      stop("ERROR #2 : If pert_iname is null. It only allows all distil_ids which were control experiments.")
+  }
+
+  # Internal variables
+  service <- "profiles"
+  
+  if(!is.null(pert_iname) & !is.null(pert_ids)) {
+    stop("Conflict of input parameters")
+  }
+  
+  if(!is.null(pert_iname)) {
+    q1 <- BUILDquery.filter(service = "perts",
+                            where = c("pert_iname"=pert_iname),
+                            fields = c("pert_id"),
+                            features = c("limit"=1000,"skip"=0),
+                            user_key=user_key)
+    g1 <- GETquery.api.CLUE(q1)
+    pert_ids <- unlist(lapply(g1,function(z) z$pert_id))
+    pert_iname <- NULL
+  }
+  
+  
+  q0 <- BUILDquery.count(service = service,
+                         where = list("pert_type"=pert_type,"pert_id"=pert_ids,"cell_id"=cell_id),
+                        user_key = user_key)
+  # cat(paste0("#QUERY counts:",q0,"\n"))
+  g0 <- GETquery.api.CLUE(q0)
+  NumDocs <- g0$count
+  
+  if(NumDocs==0) {
+    warning(paste0("pert_iname : ",pert_iname," does not exist for this cell line."))
+    res <- FALSE
+  } else {
+    res <- TRUE
+  }
+  
+  return(res)
+}
+
+
+
+# GEM() ##############
+# Description:
+#   This function get the Gene Expression Matrix (GEM) from the raw GCTX file for a given set of distil_ids.
+#   Optionally, it can transform a GEM into Gene Set Matrix. This is done only when GeneSet.file is not NULL.
+GEM <- function(GCTX="/drives/slave/TBU/LINCS_RawData/q2norm_n1328098x22268.gctx",
+                distil_ids,
+                probe2symbol=TRUE,
+                GeneSet.file=NULL,
+                ssgsea.method="gsva") {
+  
+  
+  if(!file.exists(GCTX)) {
+    stop("ERROR #1 : GCTX does not exist.\n");
+  }
+  
+  #--- Get the gene expression matrix
+  require("rhdf5")
+  # Parse the colnames
+  id_distil <- read.gctx.ids(GCTX, "col")
+  # Get the ids for those colnames
+  col_IDs <- which(id_distil %in% distil_ids)
+  # Get the final matrix
+  MAT.GCT <- parse.gctx(GCTX,cid = col_IDs)
+  # The actual Matrix
+  MAT <- MAT.GCT@mat
+  # Close h5
+  H5close()
+  
+  # CollapseRows by maxmean?
+  if(probe2symbol) {
+    #--- collapseRows by MaxMean
+    require("hgu133a.db")
+    require("WGCNA")
+    gene.symbols <- as.character(mget(as.character(rownames(MAT)), hgu133aSYMBOL))
+    
+    if(grepl("^q2norm",basename(GCTX))) {
+      chooseProbe.method <- "MaxMean"
+    } else if(grepl("^zspc",basename(GCTX))) {
+      chooseProbe.method <- "absMaxMean"
+    } else {
+      chooseProbe.method <- "MaxMean"
+    }
+    
+    cat(paste0("#Using collapseRows (method=",chooseProbe.method,")\n"),file=stdout())
+    cr_obj.MaxMean <- collapseRows(MAT,
+                                   rowGroup = gene.symbols,
+                                   rowID = rownames(MAT),
+                                   method=chooseProbe.method)
+    datETcollapsed <- cr_obj.MaxMean$datETcollapsed
+    MAT <- datETcollapsed[which(rownames(datETcollapsed)!="NA"),]
+    
+  }
+  
+  # Transform Genes into Gene Sets
+  if(!is.null(GeneSet.file)){
+    require(GSVA)
+    require(GSEABase)
+    cat("Transforming Gene-level expression values into Gene-Set expression values.\n",file=stdout())
+    cat(paste0("The dimension of the matrix is ncol=",ncol(MAT),". "),file=stdout())
+    cat("This will take a lot of time... be patient.\n",file=stdout())
+    GMT <- getGmt(GeneSet.file)
+    MAT <- gsva(MAT,GMT,method=ssgsea.method,rnaseq=FALSE,parallel.sz=1)
+    if(ssgsea.method=="gsva")
+      MAT <- MAT$es.obs
+  }
+  
+  return(MAT)
+}
+
+# GEM2eSet() ############
+# Description
+#   This function generate an entire Expression-Set with the Gene Expression Matrix (GEM) as expression and 
+#   metada in phenotype data. You can acess to the data as following:
+#     exprs(eSet) : Gene Expression Matrix
+#     pData(eSet) : Phenotype data, usually 
+#                     - treatment : trt=perturbated group; cntl=control group
+#                     - det_palte : Original det_plate
+# Parameters
+#
+#
+GEM2eSet <- function(GCTX="/drives/slave/TBU/LINCS_RawData/q2norm_n1328098x22268.gctx",
+                     trt.distil_ids,cntl.distil_ids,probe2symbol=TRUE,
+                     GeneSet.file=NULL,ssgsea.method="gsva") {
+  library(Biobase)
+  
+  #--- Build the Expression Set
+  #-- Expression Matrix
+  # Get the Gene expression matrix,
+  #     if the user used a GeneSet.file!=NULL, then
+  #     the Gene Expression matrix will be actually a
+  #     Gene-Set Expression Matrix. This allows to use limma too. See vignette(gsva)
+  mat <- GEM(GCTX = GCTX,
+             distil_ids = c(trt.distil_ids,cntl.distil_ids),
+             probe2symbol=probe2symbol,
+             GeneSet.file=GeneSet.file,
+             ssgsea.method=ssgsea.method)
+  # To rename future data, the original colnames will be stored.
+  originalRowNames <- rownames(mat)
+  
+  # # Sanity check
+  # if(!any(trt.distil_ids%in%colnames(mat))) {
+  #   stop("There is no samples in the treatment group (trt)");
+  # }
+  
+  #-- Phenotype Data
+  # Parse some metadata
+  #NOTE: Since distil_ids selfcontains useful information of plate_id, we could use it without any query
+  # Treatment covariate
+  treatment <- as.factor(sapply(colnames(mat),function(z) ifelse(z%in%trt.distil_ids,"trt","cntl")))
+  treatment <- relevel(treatment,ref="cntl")
+  # plate identifier covariate
+  det_plate <- as.factor(unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1])))
+  # det_plate <- unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1]))
+  
+  # Cell line
+  cell_id <- as.factor(unlist(sapply(colnames(mat),function(z) strsplit(z,split="_")[[1]][2])))
+  
+  # Sanity check
+  stopifnot(all(colnames(mat)%in% c(trt.distil_ids,cntl.distil_ids)))
+  stopifnot(!any(trt.distil_ids%in%cntl.distil_ids))
+  
+  # Phenotype data
+  pheno <- data.frame("treatment"=treatment,
+                      "cell_id"=cell_id,
+                      "det_plate"=det_plate,
+                      row.names=colnames(mat),
+                      stringsAsFactors = TRUE)
+  
+  #--- Create the eSet
+  colnames(mat) <-  rownames(pheno)
+  rownames(mat) <- make.names(rownames(mat))
+  
+  mat.es =  ExpressionSet(assayData=mat, phenoData = new("AnnotatedDataFrame", data=pheno))
+  
+  featureNames(mat.es) <- originalRowNames
+  
+  return(mat.es)
+}
+
+# eSet_woBatchEffect ######
+eSet_woBatchEffect <- function(eSet,method="limma") {
+  if(is(eSet)[1]!="ExpressionSet") {
+    stop("ERROR #1 : The input must be a expression set");
+  }
+  
+  MAT <- exprs(eSet)
+  
+  if(method=="limma") {
+    # Design
+    if(length(levels(pData(eSet)$treatment))>1) {
+      treatment <- pData(eSet)$treatment
+      des <- model.matrix(~treatment)
+    } else {
+      des <- model.matrix(~1,data=pData(eSet))
+    }
+    batch <- pData(eSet)$det_plate
+    
+    MAT2 <- removeBatchEffect(MAT,design = des,batch = batch)
+  } else if (method=="combat") {
+    require(sva)
+    treatment <- pData(eSet)$treatment
+    batch <- pData(eSet)$det_plate
+    modcombat <- model.matrix(~1 + treatment,data=pData(eSet))
+    
+    MAT2 = ComBat(dat=MAT, batch=batch, mod=modcombat)
+  }
+
+  eSet2 <- eSet
+  exprs(eSet2) <- MAT2
+  return(eSet2)
+}
+
+# limma_LVL3() ##################
+# Description :
+#   This function peforms a limma comparison (see `limmaUsersGuide()`) for a trt Vs. cntl experiment from l1k.
+#   It works with small molecule compounds, knock-down, and over-expression perturbations. The only point
+#     is that you need to specify which distil_ids are for trt condition, and which ones are for cntl (CONTROL).
+#   This function only works for the level 3 data from LINCS L1K
+# Arguments :
+#   GCTX : GCTX file with the level 4 data.
+#   trt.distil_ids : TREATED CONDITION - vector of distil_ids which will be matched in the GCTX expression matrix.
+#   cntl.distil_ids : CONTROL CONDITION - vector of distil_ids which will be matched in the GCTX expression matrix.
+#   GeneSet.file : The GMT file which contains the gene set to be transformed into from the Gene Expression matrix
+#   ssgsea.method : choose a ssgsea method between gsva or ssgsea
+limma_LVL3 <- function(GCTX="/drives/slave/TBU/LINCS_RawData/q2norm_n1328098x22268.gctx",
+                       trt.distil_ids,cntl.distil_ids,probe2symbol=TRUE,
+                       GeneSet.file=NULL,ssgsea.method="gsva") # Only if it must be transformed into gene sets
+{
+  require(limma)
+  
+  # Get the Gene expression matrix,
+  #     if the user used a GeneSet.file!=NULL, then
+  #     the Gene Expression matrix will be actually a 
+  #     Gene-Set Expression Matrix. This allows to use limma too. See vignette(gsva)
+  mat <- GEM(GCTX = GCTX,distil_ids = c(trt.distil_ids,cntl.distil_ids),
+             probe2symbol=probe2symbol,
+             GeneSet.file=GeneSet.file,
+             ssgsea.method=ssgsea.method)
+  
+  # Sanity check
+  if(!any(trt.distil_ids%in%colnames(mat))) {
+    stop("There are no samples in the treatment group (trt)");
+  }
+  
+  if(!any(cntl.distil_ids%in%colnames(mat))) {
+    stop("There are no samples in the control group (cntl)")
+  }
+  
+  #--- Parse some metadata
+  #NOTE: Since distil_ids selfcontains useful information of plate_id, we could use it without any query
+  # Treatment covariate
+  treatment <- as.factor(sapply(colnames(mat),function(z) ifelse(z%in%trt.distil_ids,"trt","cntl")))
+  treatment <- relevel(treatment,ref="cntl")
+  # plate identifier covariate
+  det_plate <- as.factor(unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1])))
+  # det_plate <- unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1]))
+  
+  # Sanity check
+  stopifnot(all(colnames(mat)%in% c(trt.distil_ids,cntl.distil_ids)))
+  stopifnot(!any(trt.distil_ids%in%cntl.distil_ids))
+  
+  #--- Build the design model
+  # Generate the formula
+  form.str <- "~ treatment";
+  if(length(levels(det_plate))>1) 
+    form.str <- paste(form.str,"det_plate",sep=" + ");
+  # [... you can add some covariates into the model using the code above]
+  des <- model.matrix(as.formula(form.str))
+  
+  # VERBOSE
+  cat(paste0("#Genome-wide Differential Gene Expression Analysis verbose","\n"),file=stdout())
+  cat(paste0("\t Group A (#trt=",sum(treatment=="trt"),")\n"),file=stdout())
+  cat(paste0("\t Group B (#cntl=",sum(treatment=="cntl"),")\n"),file=stdout())
+  cat(paste0("\t Block Factor 'det_plate' (#unique det_plate=",length(levels(det_plate)),")\n"),file=stdout())
+  cat(paste0("\t Formula for Design Matrix: ",form.str,"\n"),file=stdout())
+  cat(paste0("\t Coefficient of Contrast: ",colnames(des)[2],"\n"),file=stdout())
+  
+  # Perform the gene-wide limma test
+  fit <- lmFit(mat,design = des)
+  fit.cont <- contrasts.fit(fit,coefficients = 2) # NOTE: Coef=2 is the 'treatment' covariate, 
+  #   because the 1st is the intercept
+  eBay <- eBayes(fit.cont)
+  
+  return(eBay)
+}
+
+# GETeSet()
+# Description : pending
+# Parameters : pending
+GETeSet <- function(pert_iname=NULL,user_key,pert_id=NULL,
+                    trt.pert_type="trt_cp",
+                    cntl.pert_type="ctl_vehicle",
+                    cell_ids=NULL,
+                    probe2symbol=TRUE,
+                    GeneSet.file=NULL,ssgsea.method="ssgsea") {
+  
+  require("rhdf5")
+  require("WGCNA")
+  
+  #--- Generate the signature
+  cat("GENERATING Expression-Set(s) for a given perturbation:\n",file=stdout())
+  cat(paste0("\tpert_iname:\t",pert_iname,"\n"),file=stdout())
+  
+  # There is a common block in this function which consists in getting the distil_ids
+  if(!is.null(trt.pert_type)) {
+    #   for the Treatment Group (TRT).
+    TRT.where <- list("pert_type"=trt.pert_type)
+    if(!is.null(cell_ids)) TRT.where <- c(TRT.where,list("cell_id"=cell_ids))
+    
+    TRT.info.got<- GETpert_info(pert_iname = pert_iname,pert_ids = pert_id,
+                                where = TRT.where,fields = c("det_plate","distil_id"),
+                                metadata = NULL,user_key = user_key)
+    TRT.distil_ids <- unlist(lapply(TRT.info.got,function(z) z$distil_id))
+    TRT.det_plates <- unlist(lapply(TRT.info.got,function(z) z$det_plate))
+  } else {
+    TRT.distil_ids <- NULL
+  }
+  
+  # GET CONTROL distil_ids
+  CNTL.where <- list("pert_type"=cntl.pert_type)
+  if(!is.null(trt.pert_type)) CNTL.where <- c(CNTL.where,list("det_plate"=TRT.det_plates));
+  if(!is.null(cell_ids)) CNTL.where <- c(CNTL.where,list("cell_id"=cell_ids));
+  
+  CNTL.distil_ids<- GETpert_info(pert_iname = NULL,pert_ids = NULL,
+                                 where = CNTL.where,fields = NULL,
+                                 metadata = "distil_id",user_key = user_key)
+  
+  #--- Getting the Expression Set
+    # Just one eSet
+    eSet <- GEM2eSet(trt.distil_ids = TRT.distil_ids,
+                     cntl.distil_ids = CNTL.distil_ids,
+                     probe2symbol=probe2symbol,
+                     GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+  
+  return(eSet);
+} # END f(x)
+
+# GETsignature.LIMMA_LVL3 ###############
+# This is a wrapper function for getting signatures by LIMMA_LVL3.
+# Please, see the following functions:
+#     - GET_SMCsignature()
+#     - GET_KDsignature()
+#     - GET_OEsignature()
+GETsignature.LIMMA_LVL3 <- function(pert_iname=NULL,pert_id=NULL,
+                                    trt.pert_type="trt_cp",
+                                    cntl.pert_type="ctl_vehicle",
+                                    cell_ids=NULL,
+                                    probe2symbol=TRUE,
+                                    user_key,
+                                    GeneSet.file=NULL,
+                                    ssgsea.method="ssgsea") {
+  
+  rawsignatures.type <- "LIMMA_LVL3"
+  
+  #--- Generate the signature
+  cat("GENERATING signatures by LIMMA\n",file=stdout())
+  require(limma)
+  require(WGCNA)
+  
+  # There is a common block in this function which consists in getting the distil_ids
+  #   for the Treatment Group (TRT).
+  TRT.where <- list("pert_type"=trt.pert_type)
+  if(!is.null(cell_ids)) TRT.where <- c(TRT.where,list("cell_id"=cell_ids))
+  
+  TRT.info.got<- GETpert_info(pert_iname = pert_iname,pert_ids = pert_id,
+                              where = TRT.where,fields = c("det_plate","distil_id"),
+                              metadata = NULL,user_key = user_key)
+  TRT.distil_ids <- unlist(lapply(TRT.info.got,function(z) z$distil_id))
+  TRT.det_plates <- unlist(lapply(TRT.info.got,function(z) z$det_plate))
+  
+  # GET CONTROL distil_ids
+  CNTL.where <- list("pert_type"=cntl.pert_type,"det_plate"=TRT.det_plates)
+  if(!is.null(cell_ids)) CNTL.where <- c(CNTL.where,list("cell_id"=cell_ids))
+  
+  CNTL.distil_ids<- GETpert_info(pert_iname = NULL,pert_ids = NULL,
+                                 where = CNTL.where,fields = NULL,
+                                 metadata = "distil_id",user_key = user_key)
+  
+  #--- Perform eBayes
+  # Just a limma including all pert_ids
+  eBay <- limma_LVL3(trt.distil_ids = TRT.distil_ids,
+                     cntl.distil_ids = CNTL.distil_ids,
+                     probe2symbol = probe2symbol,
+                     GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+  # # Sanity check
+  # if(length(list.eBays)==0) {
+  #   stop(paste0("There are no eBayes generated for this pert_iname:",pert_iname,pert_id))
+  # }
+  
+  return(eBay);
+} # END f(x)
+
+
+# GETsignature.default ::
+# This is a wrapper function implemented with the aim of adding more rawsignatures.types in the future.
+# Please, see the following functions:
+#     - GET_SMCsignature()
+#     - GET_KDsignature()
+#     - GET_OEsignature()
+GETsignature.default <- function(pert_iname=NULL,pert_id=NULL,
+                                 rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                                 user_key,
+                                 trt.pert_type="trt_cp",
+                                 cntl.pert_type="ctl_vehicle",
+                                 cell_ids=NULL,
+                                 probe2symbol=TRUE,
+                                 GeneSet.file=NULL,ssgsea.method="gsva") {
+  # Load libraries
+  require(GeneExpressionSignature)
+  require(GSEABase)
+  require(Biobase)
+  require(RCurl)
+  require(rjson)
+  require(rhdf5) # Access to GCTX files
+  require("hgu133a.db")
+  require(AnnotationDbi)
+  require(annotate)
+  #
+  
+  if(rawsignatures.type=="LIMMA_LVL3") {
+    eBay <- GETsignature.LIMMA_LVL3(pert_iname=pert_iname,
+                                         pert_id=pert_id,
+                                         user_key=user_key,
+                                         trt.pert_type=trt.pert_type,
+                                         cntl.pert_type=cntl.pert_type,
+                                         cell_ids=cell_ids,
+                                         probe2symbol=probe2symbol,
+                                         GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+    
+  } else if (awsignatures.type=="PRL_LVL4"){
+    stop("DEPRECATED PRL FUNCTION")
+    if(!is.null(GeneSet.file))
+      stop("ERROR #2 : GeneSet transformation is only available when LIMMA_LVL3");
+    # OBJ.final <- GETsignature.PRL_LVL4(pert_iname=pert_iname,
+    #                                    Ngenes=Ngenes,user_key=user_key,
+    #                                    trt.pert_type=trt.pert_type,
+    #                                    cell_ids=cell_ids,
+    #                                    stratifyBy.pert_id=stratifyBy.pert_id,
+    #                                    return.GSC=return.GSC,
+    #                                    probe2symbol=probe2symbol)
+  }
+  
+  return(eBay)
+}
+
+
+# GET_SMCsignature() ::
+# Description :
+#   This function executes a battery of primary functions in order to get a gene expression signature for a
+#   Small Molecule Compound
+#   It can be used by following two approaches: limma using lvl3, and PRL using lvl4.
+# Arguments :
+#   drug : The pert_iname for the knocked-down gene. It must be a gene symbol.
+#   rawsignatures.type : "LIMMA_LVL3" or "PRL_LVL4", depending on the method to get the signature.
+#   Ngenes : Number of genes in the final rank aggregated collapsed gene sets.
+#   stratifyBy.pert_id : logical. If different pert_id for a given pert_iname must be gathered individually.
+#   cntl_cache.distil_ids : file. The RDS file of control distil_ids.
+#   probe2symbol : logical. If probes must be collapse to symbols.
+#   user_key : Your user key for API LINCS L1k
+
+GET_SMCsignature <- function(drug=NULL,pert_id=NULL,
+                             rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                             user_key,
+                             cell_ids=NULL,
+                             probe2symbol=TRUE,
+                             GeneSet.file=NULL,ssgsea.method="gsva") {
+  
+  eBay <- GETsignature.default(pert_iname=drug,
+                                    pert_id=pert_id,
+                                    rawsignatures.type=rawsignatures.type,
+                                    user_key=user_key,
+                                    trt.pert_type="trt_cp",cntl.pert_type="ctl_vehicle",
+                                    cell_ids=cell_ids,
+                                    probe2symbol=probe2symbol,
+                                    GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+  return(eBay)  
+}
+
+
+# GET_KDsignature() ::
+# Description :
+#   This function executes a battery of primary functions in order to get a gene expression signature for a
+#   knock-down gene.
+#   It can be used by following two approaches: limma using lvl3, and PRL using lvl4.
+# Arguments :
+#   symbol : The pert_iname for the knocked-down gene. It must be a gene symbol.
+#   rawsignatures.type : "LIMMA_LVL3" or "PRL_LVL4", depending on the method to get the signature.
+#   Ngenes : Number of genes in the final rank aggregated collapsed gene sets.
+#   stratifyBy.pert_id : logical. If different pert_id for a given pert_iname must be gathered individually.
+#   cntl_cache.distil_ids : file. The RDS file of control distil_ids.
+#   probe2symbol : logical. If probes must be collapse to symbols.
+#   user_key : Your user key for API LINCS L1k
+
+GET_KDsignature <- function(symbol,
+                            pert_id=NULL,
+                            rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                            user_key,
+                            cell_ids=NULL,
+                            probe2symbol=TRUE,
+                            GeneSet.file=NULL,ssgsea.method="gsva") {
+  
+  OBJ.final <- GETsignature.default(pert_iname=symbol,
+                                    pert_id=pert_id,
+                                    rawsignatures.type=rawsignatures.type,
+                                    user_key=user_key,
+                                    trt.pert_type="trt_sh",cntl.pert_type="ctl_vector",
+                                    cell_ids=cell_ids,
+                                    probe2symbol=probe2symbol,
+                                    GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+  return(OBJ.final)  
+}
+
+# GET_OEsignature() ::
+# Description :
+#   This function executes a battery of primary functions in order to get a gene expression signature for a
+#   over-expression gene.
+#   It can be used by following two approaches: limma using lvl3, and PRL using lvl4.
+# Arguments :
+#   symbol : The pert_iname for the over-expressed gene. It must be a gene symbol.
+#   rawsignatures.type : "LIMMA_LVL3" or "PRL_LVL4", depending on the method to get the signature.
+#   Ngenes : Number of genes in the final rank aggregated collapsed gene sets.
+#   stratifyBy.pert_id : logical. If different pert_id for a given pert_iname must be gathered individually.
+#   cntl_cache.distil_ids : file. The RDS file of control distil_ids.
+#   probe2symbol : logical. If probes must be collapse to symbols.
+#   user_key : Your user key for API LINCS L1k
+
+GET_OEsignature <- function(symbol,
+                            pert_id=NULL,
+                            rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                            user_key,
+                            cell_ids=NULL,
+                            probe2symbol=TRUE,
+                            GeneSet.file=NULL,ssgsea.method="gsva") {
+  
+  OBJ.final <- GETsignature.default(pert_iname=symbol,
+                                    pert_id=pert_id,
+                                    rawsignatures.type=rawsignatures.type,
+                                    user_key=user_key,
+                                    trt.pert_type="trt_oe",cntl.pert_type="ctl_untrt",
+                                    cell_ids=cell_ids,
+                                    probe2symbol=probe2symbol,
+                                    GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
+  return(OBJ.final)  
 }
