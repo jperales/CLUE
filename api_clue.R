@@ -19,7 +19,7 @@ source("/drives/slave/TBU/LINCS_RawData/Functions_l1ktools.R")
 ## Dependencies:
 ###   library(rjson) # Read json into a list in R
 ###   require(RCurl) # To get text from URL as json object
-GETquery.api.CLUE <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=3,tryAgainAfter_Xmins=20) {
+GETquery.api.CLUE <- function(query.url,tryGETresponse=TRUE,tryNtimesIfFailed=7,tryAgainAfter_Xmins=30) {
   require(rjson)
   require(RCurl)
   # Parameters sanity check:
@@ -158,13 +158,13 @@ BUILDquery.count <- function(service="profiles",
 ### This function get all metadata available for a given drug. For instance, all distil_ids for DMSO.
 GETpert_info <- function(pert_iname=NULL,pert_ids=NULL,where=list("pert_type"="trt_cp"),
                          fields=NULL,metadata=NULL,
-                         user_key="lincsdemo",waitXsecs=0) {
+                         user_key="lincsdemo",waitXsecs=0,service="profiles") {
   
   # Internal variables
-  service <- "profiles"
+  # service <- "profiles"
   
   if(!is.null(pert_iname) & !is.null(pert_ids)) {
-    stop("Conflict of input parameters")
+    stop("# ERROR #1: Conflict of input parameters")
   }
   
   if(!is.null(pert_iname)) {
@@ -176,11 +176,15 @@ GETpert_info <- function(pert_iname=NULL,pert_ids=NULL,where=list("pert_type"="t
     g1 <- GETquery.api.CLUE(q1)
     pert_ids <- unlist(lapply(g1,function(z) z$pert_id))
     pert_iname <- NULL
+    
+    if( is.null(pert_iname) & is.null(pert_ids)) {
+      stop("# ERROR #2 : The user (or sometimes the database) has specified that both pert_iname and pert_id are null. We cannot generate a signature with that.\n")
+    }
+    
   }
   
   # The CLUE api does not include pert_iname in the service profiles, so we need to get it from the other
   # service called perts
-  
   
   # From old LINCScloud documentation
   block_size <- 1000;
@@ -192,8 +196,6 @@ GETpert_info <- function(pert_iname=NULL,pert_ids=NULL,where=list("pert_type"="t
                                              "Consensus vehicle control"),
                               pert_type=c("trt_cp","trt_sh","trt_sh.cgs","trt_oe","trt_oe.mut","trt_lig","ctl_untrt","ctl_untrt.cns",
                                           "ctl_vector","ctl_vector.cns","trt_sh.css","ctl_vehicle","ctl_vehicle.cns"))
-  
-  
   
   q0 <- BUILDquery.count(service = service,where = c(where,list("pert_id"=pert_ids)),user_key = user_key)
   # cat(paste0("#QUERY counts:",q0,"\n"))
@@ -454,9 +456,8 @@ eSet_woBatchEffect <- function(eSet,method="limma") {
     MAT2 <- removeBatchEffect(MAT,design = des,batch = batch)
   } else if (method=="combat") {
     require(sva)
-    treatment <- pData(eSet)$treatment
+    modcombat <- model.matrix(~1,data=pData(eSet))
     batch <- pData(eSet)$det_plate
-    modcombat <- model.matrix(~1 + treatment,data=pData(eSet))
     
     MAT2 = ComBat(dat=MAT, batch=batch, mod=modcombat)
   }
@@ -798,3 +799,298 @@ GET_OEsignature <- function(symbol,
                                     GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method)
   return(OBJ.final)  
 }
+
+#### PERMUTATIONS -----#######
+# limma_LVL3.Npermut
+# Description :
+#   This function peforms a permutation of N limma comparison (see `limmaUsersGuide()`) for a trt Vs. cntl experiment from l1k.
+#   It works with small molecule compounds, knock-down, and over-expression perturbations. The only point
+#     is that you need to specify which distil_ids are for trt condition, and which ones are for cntl (CONTROL).
+#   This function only works for the level 3 data from LINCS L1K
+# Arguments :
+#   GCTX : GCTX file with the level 4 data.
+#   trt.distil_ids : TREATED CONDITION - vector of distil_ids which will be matched in the GCTX expression matrix.
+#   cntl.distil_ids : CONTROL CONDITION - vector of distil_ids which will be matched in the GCTX expression matrix.
+#   no.permutations : Number of permutations to perform
+limma_LVL3.Npermut <- function(GCTX="/drives/slave/TBU/LINCS_RawData/q2norm_n1328098x22268.gctx",
+                               trt.distil_ids,cntl.distil_ids,probe2symbol=TRUE,
+                               GeneSet.file=NULL,ssgsea.method="gsva", # Only if it must be transformed into gene sets
+                               no.permutations=1000,statistic.name="t") 
+{
+  require(limma)
+  
+  # Get the Gene expression matrix,
+  #     if the user used a GeneSet.file!=NULL, then
+  #     the Gene Expression matrix will be actually a 
+  #     Gene-Set Expression Matrix. This allows to use limma too. See vignette(gsva)
+  mat <- GEM(GCTX = GCTX,distil_ids = c(trt.distil_ids,cntl.distil_ids),
+             probe2symbol=probe2symbol,
+             GeneSet.file=GeneSet.file,
+             ssgsea.method=ssgsea.method)
+  
+  # Sanity check
+  if(!any(trt.distil_ids%in%colnames(mat))) {
+    stop("There is no samples in the treatment group (trt)");
+  }
+  
+  #--- Parse some metadata
+  #NOTE: Since distil_ids selfcontains useful information of plate_id, we could use it without any query
+  # Treatment covariate
+  treatment.original <- as.factor(sapply(colnames(mat),function(z) ifelse(z%in%trt.distil_ids,"trt","cntl")))
+  treatment.original <- relevel(treatment.original,ref="cntl")
+  # plate identifier covariate
+  det_plate <- as.factor(unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1])))
+  # det_plate <- unlist(sapply(colnames(mat),function(z) strsplit(z,split=":")[[1]][1]))
+  
+  # Sanity check
+  stopifnot(all(colnames(mat)%in% c(trt.distil_ids,cntl.distil_ids)))
+  stopifnot(!any(trt.distil_ids%in%cntl.distil_ids))
+  
+  #--- Build the design model
+  # Generate the formula
+  form.str <- "~ treatment";
+  if(length(levels(det_plate))>1) 
+    form.str <- paste(form.str,"det_plate",sep=" + ");
+  # [... you can add some covariates into the model using the code above]
+  
+  
+  # Create the matrix which will contain the statistics from the permutation
+  PERMmat <- matrix(NA,nrow=nrow(mat),ncol=no.permutations,dimnames=list(rownames(mat)))
+  
+  cat(paste0("Performing n=",no.permutations," permutations. Statistic:",statistic.name),
+      sep="\n",file=stdout())
+  for(permut.idx in 1:no.permutations) {
+    # For each loop, sampling the trt/cntl tags. Then generate the design matrix
+    treatment <- sample(treatment.original)
+    names(treatment) <- names(treatment.original)
+    
+    des <- model.matrix(as.formula(form.str))
+    
+    # Perform the gene-wide limma test
+    fit <- lmFit(mat,design = des)
+    fit.cont <- contrasts.fit(fit,coefficients = 2) # NOTE: Coef=2 is the 'treatment' covariate, 
+    #   because the 1st is the intercept
+    # eBay <- eBayes(fit.cont)
+    
+    PERMmat[,permut.idx] <- eBayes(fit.cont)[[statistic.name]]
+    
+  }
+  
+  return(PERMmat)
+}
+
+
+
+
+# GETpermutSignature.LIMMA_LVL3 ::
+# This is a wrapper function for getting signatures by LIMMA_LVL3.Npermut
+# Please, see the following functions:
+#     - GET_SMCpermutSignature()
+#     - GET_KDpermutSignature()
+#     - GET_OEspermutSignature()
+GETpermutSignature.LIMMA_LVL3 <- function(pert_iname=NULL,pert_id=NULL,
+                                          user_key,
+                                          trt.pert_type="trt_cp",
+                                          cntl.pert_type="ctl_vehicle",
+                                          cell_ids=NULL,
+                                          probe2symbol=TRUE,ssgsea.method="ssgsea",GeneSet.file=NULL,
+                                          no.permutations=1000) {
+  
+  rawsignatures.type <- "LIMMA_LVL3"
+  
+  #--- Generate the signature
+  cat("GENERATING signatures by LIMMA\n",file=stdout())
+  require(limma)
+  require(WGCNA)
+  
+  # There is a common block in this function which consists in getting the distil_ids
+  #   for the Treatment Group (TRT).
+  TRT.where <- list("pert_type"=trt.pert_type)
+  if(!is.null(cell_ids)) TRT.where <- c(TRT.where,list("cell_id"=cell_ids))
+  
+  TRT.info.got<- GETpert_info(pert_iname = pert_iname,pert_ids = pert_id,
+                              where = TRT.where,fields = c("det_plate","distil_id"),
+                              metadata = NULL,user_key = user_key)
+  TRT.distil_ids <- unlist(lapply(TRT.info.got,function(z) z$distil_id))
+  TRT.det_plates <- unlist(lapply(TRT.info.got,function(z) z$det_plate))
+  
+  # GET CONTROL distil_ids
+  CNTL.where <- list("pert_type"=cntl.pert_type,"det_plate"=TRT.det_plates)
+  if(!is.null(cell_ids)) CNTL.where <- c(CNTL.where,list("cell_id"=cell_ids))
+  
+  CNTL.distil_ids<- GETpert_info(pert_iname = NULL,pert_ids = NULL,
+                                 where = CNTL.where,fields = NULL,
+                                 metadata = "distil_id",user_key = user_key)
+  
+  #--- Perform eBayes
+    # Just a limma including all pert_ids
+    PERMmat <- limma_LVL3.Npermut(trt.distil_ids = TRT.distil_ids,
+                                  cntl.distil_ids = CNTL.distil_ids,
+                                  probe2symbol = probe2symbol,
+                                  GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method,
+                                  no.permutations=no.permutations)
+
+
+  return(PERMmat);
+} # END f(x)
+
+# GETpermutSignature.default ::
+# This is a wrapper function implemented with the aim of adding more rawsignatures.types in the future.
+# Please, see the following functions:
+#     - GET_SMCsignature()
+#     - GET_KDsignature()
+#     - GET_OEsignature()
+GETpermutSignature.default <- function(pert_iname=NULL,pert_id=NULL,
+                                       rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                                       user_key,
+                                       trt.pert_type="trt_cp",
+                                       cntl.pert_type="ctl_vehicle",
+                                       cell_ids=NULL,
+                                       probe2symbol=TRUE,
+                                       GeneSet.file=NULL,ssgsea.method="gsva",
+                                       no.permutations=1000) {
+  # Load libraries
+  require(GeneExpressionSignature)
+  require(GSEABase)
+  require(Biobase)
+  require(RCurl)
+  require(rjson)
+  require(rhdf5) # Access to GCTX files
+  require("hgu133a.db")
+  require(AnnotationDbi)
+  require(annotate)
+  #
+  
+  
+  if(!is.null(GeneSet.file))
+    stop("ERROR #1 : 'return.GSC'=TRUE is NOT available when the gene expression is transformed into Gene Sets.")
+  
+  if(rawsignatures.type=="LIMMA_LVL3") {
+    MAT.final <- GETpermutSignature.LIMMA_LVL3(pert_iname=pert_iname,
+                                               pert_id=pert_id,
+                                               user_key=user_key,
+                                               trt.pert_type=trt.pert_type,
+                                               cntl.pert_type=cntl.pert_type,
+                                               probe2symbol=probe2symbol,
+                                               cell_ids=cell_ids,
+                                               GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method,
+                                               no.permutations=no.permutations)
+  } else {
+    # if(!is.null(GeneSet.file))
+    #   stop("ERROR #2 : GeneSet transformation is only available when LIMMA_LVL3");
+    # OBJ.final <- GETsignature.PRL_LVL4(pert_iname=pert_iname,
+    #                                    Ngenes=Ngenes,user_key=user_key,
+    #                                    trt.pert_type=trt.pert_type,
+    #                                    stratifyBy.pert_id=stratifyBy.pert_id,
+    #                                    return.GSC=return.GSC,
+    #                                    probe2symbol=probe2symbol)
+    stop("ERROR #1 under construction")
+  }
+  
+  return(MAT.final)
+}
+
+# GET_SMCpermutSignature() ::
+# Description :
+#   This function executes a battery of primary functions in order to get a gene expression signature for a
+#   Small Molecule Compound
+#   It can be used by following two approaches: limma using lvl3, and PRL using lvl4.
+# Arguments :
+#   drug : The pert_iname for the knocked-down gene. It must be a gene symbol.
+#   rawsignatures.type : "LIMMA_LVL3" or "PRL_LVL4", depending on the method to get the signature.
+#   Ngenes : Number of genes in the final rank aggregated collapsed gene sets.
+#   stratifyBy.pert_id : logical. If different pert_id for a given pert_iname must be gathered individually.
+#   cntl_cache.distil_ids : file. The RDS file of control distil_ids.
+#   probe2symbol : logical. If probes must be collapse to symbols.
+#   user_key : Your user key for API LINCS L1k
+
+GET_SMCpermutSignature <- function(drug=NULL,pert_id=NULL,
+                                   rawsignatures.type=c("LIMMA_LVL3","PRL_LVL4"),
+                                   user_key,
+                                   probe2symbol=TRUE,
+                                   GeneSet.file=NULL,ssgsea.method="gsva",
+                                   cell_ids=NULL,
+                                   no.permutations=1000) {
+  
+  MAT.final <- GETpermutSignature.default(pert_iname=drug,
+                                          pert_id=pert_id,
+                                          rawsignatures.type=rawsignatures.type,
+                                          user_key=user_key,
+                                          trt.pert_type="trt_cp",cntl.pert_type="ctl_vehicle",
+                                          cell_ids=cell_ids,
+                                          probe2symbol=probe2symbol,
+                                          GeneSet.file=GeneSet.file,ssgsea.method=ssgsea.method,
+                                          no.permutations=no.permutations)
+  return(MAT.final)  
+}
+
+#### END of PERMUTATIONS -----#######
+
+
+#### Gene Regulatory Networks -----################
+
+### GET_msVIPER ###############
+### Description : Get the Virtual Inferente of Protein Activities for a perturbation given a GRN model.
+### Parameters:
+### pert_iname :: pert_iname
+### pert_id :: pert_ids
+### trt.pert_type :: pert_type for the treatment group
+### cntl.pert_type :: pert_type for the control group
+### user_key :: user key for the API (api.clue.io)
+### cell_ids :: cell_id(s) of interest. Null is the consensus (incl. all cell ids tested in the dataset)
+### regulon :: regulon R object or file.rds with it.
+### batchRemoval.method :: Method for the batch effect removal. See eSet_woBatchEffect()
+### Comments: Make sure you use the ARACNe GRN appropiate for the query.
+
+GET_msVIPER <- function(pert_iname=NULL,pert_id=NULL,
+                     trt.pert_type="trt_cp",cntl.pert_type = "ctl_vehicle",
+                     user_key,cell_ids=NULL,probe2symbol,regulon,batchRemoval.method="combat") {
+  require(viper)
+  
+  # Sanity checks
+  if(is(regulon)[1] != "regulon") {
+    if(file.exists(regulon) & grep("\\.rds$",regulon)) {
+      regulon <- readRDS(regulon)
+      if(is(regulon)[1] != "regulon") {
+        stop("ERROR #2 : The .rds file does not contain a regulon object\n")
+      }
+    } else {
+      stop("ERROR #1 : The regulon object must be a .RDS file or a 'regulon' R object\n")
+    }
+  }
+  
+  if(is.null(trt.pert_type) | is.null(cntl.pert_type)) {
+    stop("ERROR #3 : The msVIPER algorithm requires 2 treatment conditions.")
+  }
+  
+  cat(paste0("#Obtaining the Expression-set object","\n"),file=stdout())
+  eset <- GETeSet(pert_iname = pert_iname,user_key = user_key,pert_id = pert_id,
+                  trt.pert_type = trt.pert_type,cntl.pert_type = cntl.pert_type,
+                  cell_ids = cell_ids,probe2symbol = TRUE)
+  
+  cat(paste0("#Batch effect removal","\n"),file=stdout())
+  eset_woBatch <- eSet_woBatchEffect(eSet = eset,method=batchRemoval.method)
+  
+  if(length(levels(pData(eset_woBatch)$treatment))!=2) {
+    stop("ERROR #4 : The msVIPER algorithm requires 2 treatment conditions.")
+  }
+
+  #--- Following the vignette from VIPER paackage
+  # Gerating the gene expression signature
+  cat(paste0("#Generating the signature","\n"),file=stdout())
+  signature <- rowTtest(eset_woBatch, "treatment", "trt", "cntl")
+  signature <- (qnorm(signature$p.value/2, lower.tail = FALSE) * sign(signature$statistic))[, 1]
+  
+  # NULL model by sample permutations
+  cat(paste0("#Generating the null model","\n"),file=stdout())
+  nullmodel <- ttestNull(eset_woBatch, "treatment", "trt", "cntl", per = 1000,repos = TRUE, verbose = FALSE)
+  
+  # msVIPER
+  cat(paste0("#Calculating VIPER","\n"),file=stdout())
+  mrs <- msviper(signature,regulon,nullmodel,verbose=FALSE)
+  
+  # Return the object
+  return(mrs)
+}
+
+###
