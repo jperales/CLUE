@@ -169,7 +169,7 @@ GETpert_info <- function(pert_iname=NULL,pert_ids=NULL,where=list("pert_type"="t
   
   if(!is.null(pert_iname)) {
     q1 <- BUILDquery.filter(service = "perts",
-                            where = c("pert_iname"=pert_iname),
+                            where = c(where,c("pert_iname"=pert_iname)),
                             fields = c("pert_id"),
                             features = c("limit"=1000,"skip"=0),
                             user_key=user_key)
@@ -1094,3 +1094,144 @@ GET_msVIPER <- function(pert_iname=NULL,pert_id=NULL,
 }
 
 ###
+
+
+test_TES <- function(A=list("pert_iname"="palbociclib",
+                            "pert_id"=NULL,
+                            "trt.pert_type"="trt_cp",
+                            "cntl.pert_type"="ctl_vehicle",
+                            "cell_ids"=NULL),
+                     B=list("pert_iname"="CDK4",
+                            "pert_id"=NULL,
+                            "trt.pert_type"="trt_sh",
+                            "cntl.pert_type"="ctl_vector",
+                            "cell_ids"=NULL),
+                     Ngenes=250,
+                     # rawsignatures.type="LIMMA_LVL3",
+                     probe2symbol = TRUE,
+                     user_key="lincsdemo",
+                     no.permutations=100,
+                     show.plot=TRUE) {
+  require(fgsea)
+  
+  # Sanity check
+  if(!all(c("pert_iname","pert_id","trt.pert_type","cntl.pert_type","cell_ids") %in% names(A))) {
+    stop("ERROR #1: Not all params are included in A.")
+  }
+  if(!all(c("pert_iname","pert_id","trt.pert_type","cntl.pert_type","cell_ids") %in% names(B))) {
+    stop("ERROR #1: Not all params are included in A.")
+  }
+  
+  # First get the signatures to be compared each other
+  cat(paste0("# Generating the 'A signature' and 1000permutations by sampling samples\n"),file=stdout())
+  A.eBay <- GETsignature.LIMMA_LVL3(pert_iname=A$pert_iname,
+                                    pert_id=A$pert_id,
+                                    user_key=user_key,
+                                    trt.pert_type=A$trt.pert_type,
+                                    cntl.pert_type=A$cntl.pert_type,
+                                    cell_ids=A$cell_ids,
+                                    probe2symbol=probe2symbol,
+                                    GeneSet.file=NULL,ssgsea.method=NULL)
+  
+  A.p1k <- GETpermutSignature.LIMMA_LVL3(pert_iname=A$pert_iname,
+                                         pert_id=A$pert_id,
+                                         user_key=user_key,
+                                         trt.pert_type=A$trt.pert_type,
+                                         cntl.pert_type=A$cntl.pert_type,
+                                         probe2symbol=probe2symbol,
+                                         cell_ids=A$cell_ids,
+                                         GeneSet.file=NULL,ssgsea.method=NULL,
+                                         no.permutations=no.permutations)
+  
+  cat(paste0("# Generating the 'B signature' and 1000permutations by sampling samples\n"),file=stdout())
+  B.eBay <- GETsignature.LIMMA_LVL3(pert_iname=B$pert_iname,
+                                    pert_id=B$pert_id,
+                                    user_key=user_key,
+                                    trt.pert_type=B$trt.pert_type,
+                                    cntl.pert_type=B$cntl.pert_type,
+                                    cell_ids=B$cell_ids,
+                                    probe2symbol=probe2symbol,
+                                    GeneSet.file=NULL,ssgsea.method=NULL)
+  
+  B.p1k <- GETpermutSignature.LIMMA_LVL3(pert_iname=B$pert_iname,
+                                         pert_id=B$pert_id,
+                                         user_key=user_key,
+                                         trt.pert_type=B$trt.pert_type,
+                                         cntl.pert_type=B$cntl.pert_type,
+                                         probe2symbol=probe2symbol,
+                                         cell_ids=B$cell_ids,
+                                         GeneSet.file=NULL,ssgsea.method=NULL,
+                                         no.permutations=no.permutations)
+  
+  # Prepare the data to perform a pre-ranked GSEA
+  A.p1k_NgenesUP <- sapply(1:ncol(A.p1k),function(j) {
+    rownames(A.p1k)[order(A.p1k[,j],decreasing = TRUE)][1:Ngenes]},
+    simplify = FALSE)
+  names(A.p1k_NgenesUP) <- paste("A.Npermut",1:no.permutations,"UP",sep="_")
+  A.NgenesUP <- c(list("A.actual_UP"=names(sort(A.eBay$t[,1],decreasing = TRUE))[1:Ngenes]),A.p1k_NgenesUP) 
+  
+  A.p1k_NgenesDN <- sapply(1:ncol(A.p1k),function(j) {
+    rownames(A.p1k)[order(A.p1k[,j],decreasing = FALSE)][1:Ngenes]},
+    simplify = FALSE)
+  names(A.p1k_NgenesUP) <- paste("A.Npermut",1:no.permutations,"DN",sep="_")
+  A.NgenesDN <- c(list("A.actual_DN"=names(sort(A.eBay$t[,1],decreasing = FALSE))[1:Ngenes]),A.p1k_NgenesDN) 
+  
+  
+  
+  
+  B.p1k_NgenesUP <- sapply(1:ncol(B.p1k),function(j) {
+    rownames(B.p1k)[order(B.p1k[,j],decreasing = TRUE)][1:Ngenes]},
+    simplify = FALSE)
+  names(B.p1k_NgenesUP) <- paste("B.Npermut",1:no.permutations,"UP",sep="_")
+  B.NgenesUP <- c(list("B.actual_UP"=names(sort(B.eBay$t[,1],decreasing = TRUE))[1:Ngenes]),B.p1k_NgenesUP) 
+  
+  
+  B.p1k_NgenesDN <- sapply(1:ncol(B.p1k),function(j) {
+    rownames(B.p1k)[order(B.p1k[,j],decreasing = FALSE)][1:Ngenes]},
+    simplify = FALSE)
+  names(B.p1k_NgenesDN) <- paste("B.Npermut",1:no.permutations,"DN",sep="_")
+  B.NgenesDN <- c(list("B.actual_DN"=names(sort(B.eBay$t[,1],decreasing = FALSE))[1:Ngenes]),B.p1k_NgenesDN) 
+  
+  
+  AonB.NES_UP <- fgsea(pathways = B.NgenesUP,stats = A.eBay$t[,1],nperm = 1000)$NES
+  AonB.NES_DN <- fgsea(pathways = B.NgenesDN,stats = A.eBay$t[,1],nperm = 1000)$NES
+  AonB.cNES <- setNames((AonB.NES_UP - AonB.NES_DN),c("Actual",paste("Npermut",1:no.permutations,sep = "_")))
+  
+  BonA.NES_UP <- fgsea(pathways = A.NgenesUP,stats = B.eBay$t[,1],nperm = 1000)$NES
+  BonA.NES_DN <- fgsea(pathways = A.NgenesDN,stats = B.eBay$t[,1],nperm = 1000)$NES
+  BonA.cNES <- setNames( (BonA.NES_UP - BonA.NES_DN),c("Actual",paste("Npermut",1:no.permutations,sep = "_")))
+  
+  TES <- (AonB.cNES + BonA.cNES)/2
+  
+  if(show.plot) {
+    hist(TES[-1],xlim=c(min(TES),max(TES)),
+         main=paste0(A$pert_iname,A$pert_id," (",A$trt.pert_type,")"," ~ ",
+                     B$pert_iname,B$pert_id," (",B$trt.pert_type,")"),
+         xlab="Null Distribution of Total Enrichment Score (TES)",las=1)
+    abline(v=TES[1],col="red")
+  }
+  
+  pval = ifelse(TES[1] <0, (sum(TES[-1] < TES[1]) +1)/length(TES[-1]), (sum(TES[-1] > TES[1]) +1)/length(TES[-1]))
+  names(pval) <- "pval"
+  
+  
+  return(c("TES"=TES[1],pval))
+}
+
+
+# test_TES(A = list("pert_iname"="palbociclib",
+#                   "pert_id"=NULL,
+#                   "trt.pert_type"="trt_cp",
+#                   "cntl.pert_type"="ctl_vehicle",
+#                   "cell_ids"=NULL),
+#          B=list("pert_iname"="CDK4",
+#                 "pert_id"=NULL,
+#                 "trt.pert_type"="trt_sh",
+#                 "cntl.pert_type"="ctl_vector",
+#                 "cell_ids"=NULL),
+#          Ngenes=250,
+#          # rawsignatures.type="LIMMA_LVL3",
+#          probe2symbol = TRUE,
+#          user_key="9ca8871996ddd3f41d4062a446504d7b",
+#          no.permutations=100,
+#          show.plot=TRUE)
